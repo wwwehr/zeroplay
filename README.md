@@ -1,5 +1,5 @@
 # ZeroPlay
-A lightweight H.264/HEVC video player for the Raspberry Pi, built as a modern replacement for the discontinued __omxplayer__. Uses the V4L2 M2M hardware decoder, DRM/KMS display, and ALSA audio — zero CPU video decode, zero X11 dependency.
+A lightweight H.264 video player for the Raspberry Pi, built as a modern replacement for the discontinued __omxplayer__. Uses the V4L2 M2M hardware decoder, DRM/KMS display, and ALSA audio — zero CPU video decode, zero X11 dependency.
 
 ```
 have a nice day ;)
@@ -15,10 +15,8 @@ have a nice day ;)
 | Codec | Container |
 |---|---|
 | H.264 (up to High@L4.1) | MP4, MKV, MOV |
-| VP8 | MKV, WebM |
-| VP9 | MKV, WebM |
 
-H.264 is hardware decoded via the bcm2835 VPU. VP8 and VP9 hardware support depends on firmware version — if unsupported, ZeroPlay will report a clear error.
+H.264 is hardware decoded via the bcm2835 VPU on Pi Zero 2W, and the V4L2 stateful decoder on Pi 4.
 
 ## Installation
 
