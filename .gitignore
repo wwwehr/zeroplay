@@ -1,3 +1,6 @@
+zeroplay
 *.mp4
 *.mkv
-zeroplay
+*.avi
+*.zip
+*.save.*
