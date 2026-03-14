@@ -39,7 +39,7 @@ This will install dependencies, build from source, and place the binary at `/usr
 If you'd prefer to build yourself:
 
 ```
-sudo apt install git gcc make \
+sudo apt install git gcc make pkgconf \
   libavformat-dev libavcodec-dev libavutil-dev libswresample-dev \
   libdrm-dev libasound2-dev
 
