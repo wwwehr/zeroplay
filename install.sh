@@ -24,6 +24,7 @@ done
 # Install dependencies
 echo "installing dependencies..."
 sudo apt-get install -y \
+    pkgconf \
     libavformat-dev libavcodec-dev libavutil-dev libswresample-dev \
     libdrm-dev libasound2-dev
 
@@ -33,6 +34,7 @@ rm -rf "$BUILD_DIR"
 git clone --depth=1 "$REPO" "$BUILD_DIR"
 
 echo "building..."
+make -C "$BUILD_DIR" clean
 make -C "$BUILD_DIR"
 
 # Install
