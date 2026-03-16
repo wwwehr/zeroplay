@@ -16,7 +16,6 @@
 #include "vdec.h"
 #include "drm.h"
 #include "log.h"
-#include "sync.h"
 #include "playlist.h"
 #include "image.h"
 
@@ -50,8 +49,6 @@ typedef struct {
     const char *audio_device;
     float       image_duration_s;   /* seconds to show each image */
     int         shuffle;
-    SyncRole    sync_role;
-    char        sync_master_ip[64];
 } Options;
 
 static void print_usage(void)
@@ -72,8 +69,6 @@ static void print_usage(void)
         "  --audio-device dev      ALSA device (default: auto-detect)\n"
         "  --image-duration n      seconds per image (default 10, 0 = hold forever)\n"
         "  --verbose               print decoder/driver info\n"
-        "  --sync-master           broadcast PTS for multi-Pi sync\n"
-        "  --sync-slave ip         receive PTS from master at <ip>\n"
         "  --help                  show this message\n"
         "\n"
         "controls:\n"
@@ -105,8 +100,6 @@ static int parse_args(int argc, char *argv[], Options *opt)
         { "audio-device",     required_argument, NULL, 'a' },
         { "image-duration",   required_argument, NULL, 'd' },
         { "verbose",          no_argument,       NULL, 'V' },
-        { "sync-master",      no_argument,       NULL, 'M' },
-        { "sync-slave",       required_argument, NULL, 'S' },
         { "help",             no_argument,       NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -122,12 +115,6 @@ static int parse_args(int argc, char *argv[], Options *opt)
             case 'a': opt->audio_device     = optarg;       break;
             case 'd': opt->image_duration_s = atof(optarg); break;
             case 'V': g_verbose             = 1;            break;
-            case 'M': opt->sync_role        = SYNC_MASTER;  break;
-            case 'S':
-                opt->sync_role = SYNC_SLAVE;
-                strncpy(opt->sync_master_ip, optarg,
-                        sizeof(opt->sync_master_ip) - 1);
-                break;
             case 'h': print_usage(); exit(0);
             default:
                 fprintf(stderr, "unknown option — run with --help\n");
@@ -593,26 +580,6 @@ int main(int argc, char *argv[])
         opened++;
     }
 
-    /* Sync setup */
-    SyncContext      sync_ctx;
-    volatile int64_t sync_pts = 0;
-
-    if (opt.sync_role == SYNC_MASTER) {
-        if (sync_init_master(&sync_ctx, &sync_pts) < 0) {
-            for (int i = 0; i < opened; i++) player_shutdown(&players[i]);
-            drm_close(&drm);
-            return 1;
-        }
-    } else if (opt.sync_role == SYNC_SLAVE) {
-        if (sync_init_slave(&sync_ctx, opt.sync_master_ip) < 0) {
-            for (int i = 0; i < opened; i++) player_shutdown(&players[i]);
-            drm_close(&drm);
-            return 1;
-        }
-    } else {
-        sync_ctx.role = SYNC_NONE;
-    }
-
     term_raw();
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
@@ -798,13 +765,6 @@ int main(int argc, char *argv[])
             if (p->frame_count == 1 || p->wall_start == 0)
                 p->wall_start = now_us() - frame->pts_us;
 
-            /* Sync */
-            if (i == 0) {
-                sync_pts = p->current_pts;
-                int64_t adj = sync_correct(&sync_ctx, p->current_pts);
-                if (adj != 0) p->wall_start += adj;
-            }
-
             int64_t due = p->wall_start + frame->pts_us;
             int64_t now = now_us();
 
@@ -830,7 +790,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    sync_close(&sync_ctx);
     for (int i = 0; i < opened; i++) player_shutdown(&players[i]);
     drm_close(&drm);
 

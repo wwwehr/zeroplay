@@ -14,7 +14,6 @@ SRCS    = $(SRCDIR)/main.c     \
           $(SRCDIR)/audio.c    \
           $(SRCDIR)/vdec.c     \
           $(SRCDIR)/drm.c      \
-          $(SRCDIR)/sync.c     \
           $(SRCDIR)/playlist.c \
           $(SRCDIR)/image.c
 
