@@ -116,6 +116,7 @@ static int parse_args(int argc, char *argv[], Options *opt)
         { "audio-device",     required_argument, NULL, 'a' },
         { "image-duration",   required_argument, NULL, 'd' },
         { "verbose",          no_argument,       NULL, 'V' },
+        { "hls-bitrate",      required_argument, NULL, 'B' },
         { "help",             no_argument,       NULL, 'h' },
         { "ws-url",           required_argument, NULL, 'W' },
         { "device-token",     required_argument, NULL, 'T' },
@@ -135,6 +136,7 @@ static int parse_args(int argc, char *argv[], Options *opt)
             case 'a': opt->audio_device     = optarg;       break;
             case 'd': opt->image_duration_s = atof(optarg); break;
             case 'V': g_verbose             = 1;            break;
+            case 'B': opt->hls_max_bandwidth = atoll(optarg); break;
             case 'h': print_usage(); exit(0);
 #ifdef HAVE_WEBSOCKET
             case 'W': opt->ws_url           = optarg;       break;
@@ -149,6 +151,11 @@ static int parse_args(int argc, char *argv[], Options *opt)
     }
 
     /* Environment variable fallbacks */
+    if (opt->hls_max_bandwidth == 0) {
+        const char *hb = getenv("HLS_MAX_BANDWIDTH");
+        if (hb) opt->hls_max_bandwidth = atoll(hb);
+    }
+
 #ifdef HAVE_WEBSOCKET
     if (!opt->ws_url)       opt->ws_url = getenv("BACKEND_WS_URL");
     if (!opt->device_token) opt->device_token = getenv("DEVICE_TOKEN");
