@@ -6,6 +6,17 @@ CFLAGS += -I/usr/include/libdrm
 LIBS    = $(shell pkg-config --libs libavformat libavcodec libavutil libswresample libswscale libdrm libcjson 2>/dev/null)
 LIBS   += -lasound -lpthread
 
+# FreeType2 subtitle rendering (auto-detected)
+FREETYPE_CFLAGS := $(shell pkg-config --cflags freetype2 2>/dev/null)
+FREETYPE_LIBS   := $(shell pkg-config --libs   freetype2 2>/dev/null)
+ifneq ($(FREETYPE_CFLAGS),)
+    CFLAGS += -DHAVE_FREETYPE $(FREETYPE_CFLAGS)
+    LIBS   += $(FREETYPE_LIBS)
+    $(info subtitle: FreeType2 found — smooth font rendering enabled)
+else
+    $(info subtitle: FreeType2 not found — using bitmap font fallback)
+endif
+
 # WebSocket remote control (opt-in: make WS=1)
 ifdef WS
 CFLAGS += -DHAVE_WEBSOCKET
@@ -24,6 +35,7 @@ SRCS    = $(SRCDIR)/main.c     \
           $(SRCDIR)/drm.c      \
           $(SRCDIR)/playlist.c \
           $(SRCDIR)/image.c    \
+          $(SRCDIR)/subtitle.c    \
           $(WS_SRC)
 
 PREFIX  = /usr/local

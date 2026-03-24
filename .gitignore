@@ -4,3 +4,11 @@ zeroplay
 *.avi
 *.zip
 *.save.*
+*.srt
+*.xml
+favicon.ico
+index.html
+*.png
+Release.txt
+src/demux_changes.c
+src/main_changes.c

@@ -18,47 +18,40 @@
 #include "log.h"
 #include "playlist.h"
 #include "image.h"
+#include "subtitle.h"
 #ifdef HAVE_WEBSOCKET
 #include "ws.h"
 #endif
 
 int g_verbose = 0;
 
-/* ------------------------------------------------------------------ */
-/* Key definitions                                                      */
-/* ------------------------------------------------------------------ */
-
 #define KEY_LEFT    1000
 #define KEY_RIGHT   1001
 #define KEY_UP      1002
 #define KEY_DOWN    1003
 
-#define SEEK_SHORT_US   (60LL  * 1000000LL)   /* 1 minute  */
-#define SEEK_LONG_US    (300LL * 1000000LL)   /* 5 minutes */
-
-/* ------------------------------------------------------------------ */
-/* Options                                                              */
-/* ------------------------------------------------------------------ */
+#define SEEK_SHORT_US   (60LL  * 1000000LL)
+#define SEEK_LONG_US    (300LL * 1000000LL)
 
 #define MAX_FILES 4
 
 typedef struct {
-    const char *paths[MAX_FILES];   /* files, dirs, or playlist files */
+    const char *paths[MAX_FILES];
     int         path_count;
     int         loop;
     int         no_audio;
     float       vol;
     double      start_pos;
     const char *audio_device;
-    float       image_duration_s;   /* seconds to show each image */
+    const char *sub_path;
+    float       image_duration_s;
     int         shuffle;
-    /* WebSocket mode */
 #ifdef HAVE_WEBSOCKET
-    const char *ws_url;             /* --ws-url or BACKEND_WS_URL */
-    const char *device_token;       /* --device-token or DEVICE_TOKEN */
-    int         health_port;        /* --health-port or HEALTH_PORT */
+    const char *ws_url;
+    const char *device_token;
+    int         health_port;
 #endif
-    int64_t     hls_max_bandwidth;  /* --hls-bitrate or HLS_MAX_BANDWIDTH */
+    int64_t     hls_max_bandwidth;
 } Options;
 
 static void print_usage(void)
@@ -77,6 +70,7 @@ static void print_usage(void)
         "  --vol n                 initial volume 0-200 (default 100)\n"
         "  --pos n                 start position in seconds (video only)\n"
         "  --audio-device dev      ALSA device (default: auto-detect)\n"
+        "  --sub path              external subtitle file (.srt)\n"
         "  --hls-bitrate BPS       max HLS bandwidth in bps (or HLS_MAX_BANDWIDTH env)\n"
         "  --image-duration n      seconds per image (default 10, 0 = hold forever)\n"
         "  --verbose               print decoder/driver info\n"
@@ -114,6 +108,7 @@ static int parse_args(int argc, char *argv[], Options *opt)
         { "vol",              required_argument, NULL, 'v' },
         { "pos",              required_argument, NULL, 'p' },
         { "audio-device",     required_argument, NULL, 'a' },
+        { "sub",              required_argument, NULL, 's' },
         { "image-duration",   required_argument, NULL, 'd' },
         { "verbose",          no_argument,       NULL, 'V' },
         { "hls-bitrate",      required_argument, NULL, 'B' },
@@ -121,49 +116,34 @@ static int parse_args(int argc, char *argv[], Options *opt)
         { "ws-url",           required_argument, NULL, 'W' },
         { "device-token",     required_argument, NULL, 'T' },
         { "health-port",      required_argument, NULL, 'H' },
-        { "hls-bitrate",      required_argument, NULL, 'B' },
         { NULL, 0, NULL, 0 }
     };
 
     int c;
     while ((c = getopt_long(argc, argv, "", long_opts, NULL)) != -1) {
         switch (c) {
-            case 'l': opt->loop             = 1;            break;
-            case 'r': opt->shuffle          = 1;            break;
-            case 'n': opt->no_audio         = 1;            break;
-            case 'v': opt->vol              = atof(optarg); break;
-            case 'p': opt->start_pos        = atof(optarg); break;
-            case 'a': opt->audio_device     = optarg;       break;
-            case 'd': opt->image_duration_s = atof(optarg); break;
-            case 'V': g_verbose             = 1;            break;
+            case 'l': opt->loop              = 1;            break;
+            case 'r': opt->shuffle           = 1;            break;
+            case 'n': opt->no_audio          = 1;            break;
+            case 'v': opt->vol               = atof(optarg); break;
+            case 'p': opt->start_pos         = atof(optarg); break;
+            case 'a': opt->audio_device      = optarg;       break;
+            case 's': opt->sub_path          = optarg;       break;
+            case 'd': opt->image_duration_s  = atof(optarg); break;
+            case 'V': g_verbose              = 1;            break;
             case 'B': opt->hls_max_bandwidth = atoll(optarg); break;
             case 'h': print_usage(); exit(0);
 #ifdef HAVE_WEBSOCKET
-            case 'W': opt->ws_url           = optarg;       break;
-            case 'T': opt->device_token     = optarg;       break;
-            case 'H': opt->health_port      = atoi(optarg); break;
+            case 'W': opt->ws_url        = optarg;       break;
+            case 'T': opt->device_token  = optarg;       break;
+            case 'H': opt->health_port   = atoi(optarg); break;
 #endif
-            case 'B': opt->hls_max_bandwidth = atoll(optarg); break;
             default:
                 fprintf(stderr, "unknown option — run with --help\n");
                 return -1;
         }
     }
 
-    /* Environment variable fallbacks */
-    if (opt->hls_max_bandwidth == 0) {
-        const char *hb = getenv("HLS_MAX_BANDWIDTH");
-        if (hb) opt->hls_max_bandwidth = atoll(hb);
-    }
-
-#ifdef HAVE_WEBSOCKET
-    if (!opt->ws_url)       opt->ws_url = getenv("BACKEND_WS_URL");
-    if (!opt->device_token) opt->device_token = getenv("DEVICE_TOKEN");
-    if (opt->health_port == 0) {
-        const char *hp = getenv("HEALTH_PORT");
-        opt->health_port = hp ? atoi(hp) : 3000;
-    }
-#endif
     if (opt->hls_max_bandwidth == 0) {
         const char *hb = getenv("HLS_MAX_BANDWIDTH");
         if (!hb) hb = getenv("MPV_HLS_BITRATE");
@@ -174,8 +154,15 @@ static int parse_args(int argc, char *argv[], Options *opt)
         if (!ad) ad = getenv("MPV_AUDIO_DEVICE");
         if (ad && strcmp(ad, "auto") != 0) opt->audio_device = ad;
     }
+#ifdef HAVE_WEBSOCKET
+    if (!opt->ws_url)       opt->ws_url = getenv("BACKEND_WS_URL");
+    if (!opt->device_token) opt->device_token = getenv("DEVICE_TOKEN");
+    if (opt->health_port == 0) {
+        const char *hp = getenv("HEALTH_PORT");
+        opt->health_port = hp ? atoi(hp) : 3000;
+    }
+#endif
 
-    /* In ws mode, files are optional */
 #ifdef HAVE_WEBSOCKET
     if (optind >= argc && !opt->ws_url) { print_usage(); return -1; }
 #else
@@ -191,10 +178,6 @@ static int parse_args(int argc, char *argv[], Options *opt)
 
     return 0;
 }
-
-/* ------------------------------------------------------------------ */
-/* Terminal                                                             */
-/* ------------------------------------------------------------------ */
 
 static struct termios orig_termios;
 
@@ -234,10 +217,6 @@ static int key_poll(void)
     return 27;
 }
 
-/* ------------------------------------------------------------------ */
-/* Wall clock helpers                                                   */
-/* ------------------------------------------------------------------ */
-
 static int64_t now_us(void)
 {
     struct timespec ts;
@@ -255,14 +234,10 @@ static void sleep_us(int64_t us)
     nanosleep(&ts, NULL);
 }
 
-/* ------------------------------------------------------------------ */
-/* Signal                                                               */
-/* ------------------------------------------------------------------ */
-
 static volatile sig_atomic_t g_signal_quit = 0;
 static void signal_handler(int sig) { (void)sig; g_signal_quit = 1; }
 
-/* Crash handler — log diagnostic info before dying */
+#ifdef HAVE_WEBSOCKET
 static void crash_handler(int sig)
 {
     const char *name = sig == SIGSEGV ? "SIGSEGV" :
@@ -270,20 +245,32 @@ static void crash_handler(int sig)
                        sig == SIGBUS  ? "SIGBUS"  : "UNKNOWN";
     fprintf(stderr, "\n[zeroplay] CRASH: signal %s (%d)\n", name, sig);
     fflush(stderr);
-    /* Re-raise to get default behavior (core dump) */
     signal(sig, SIG_DFL);
     raise(sig);
 }
+#endif
 
 /* ------------------------------------------------------------------ */
-/* PlayerContext — all state for one playlist/output pair              */
+/* Subtitle helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+static int find_srt_alongside(const char *video_path,
+                               char *out, int out_size)
+{
+    strncpy(out, video_path, (size_t)(out_size - 5));
+    out[out_size - 5] = '\0';
+    char *dot = strrchr(out, '.');
+    if (dot) *dot = '\0';
+    strncat(out, ".srt", (size_t)(out_size - (int)strlen(out) - 1));
+    return access(out, R_OK) == 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* PlayerContext                                                        */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
-    /* Playlist */
     Playlist     playlist;
-
-    /* Video pipeline (only valid when !image_mode && pipeline_open) */
     DemuxContext demux;
     VdecContext  vdec;
     AudioContext audio;
@@ -292,9 +279,15 @@ typedef struct {
     Queue        frame_queue;
     pthread_t    dtid, vtid, atid;
     int          pipeline_open;
-    int          audio_active;   /* 1 if audio was successfully opened */
+    int          audio_active;
 
-    /* Playback state */
+    SubtitleContext  sub;
+    Queue            sub_queue;
+    pthread_t        stid;
+    int              sub_active;
+    int              sub_embedded;
+    const char      *last_sub_text;
+
     int64_t      wall_start;
     int          frame_count;
     int64_t      current_pts;
@@ -302,20 +295,15 @@ typedef struct {
     DecodedFrame *held_frame;
     int          eos;
 
-    /* Image mode */
     int          image_mode;
     int64_t      image_end_us;
 
-    /* Config */
     int          output_idx;
-    int          no_audio;       /* user flag: audio disabled for this player */
+    int          no_audio;
     int64_t      image_duration_us;
     int64_t      duration_us;
+    DrmContext  *drm_ctx;      /* for subtitle overlay */
 } PlayerContext;
-
-/* ------------------------------------------------------------------ */
-/* Per-player thread trampolines                                        */
-/* ------------------------------------------------------------------ */
 
 typedef struct { PlayerContext *p; } ThreadArg;
 
@@ -334,6 +322,11 @@ static void *audio_thread(void *arg)
     PlayerContext *p = ((ThreadArg *)arg)->p; free(arg);
     audio_run(&p->audio); return NULL;
 }
+static void *subtitle_thread(void *arg)
+{
+    PlayerContext *p = ((ThreadArg *)arg)->p; free(arg);
+    subtitle_run(&p->sub); return NULL;
+}
 
 static void player_threads_start(PlayerContext *p)
 {
@@ -345,6 +338,10 @@ static void player_threads_start(PlayerContext *p)
         ThreadArg *aa = malloc(sizeof(*aa)); aa->p = p;
         pthread_create(&p->atid, NULL, audio_thread, aa);
     }
+    if (p->sub_active && p->sub_embedded) {
+        ThreadArg *sa = malloc(sizeof(*sa)); sa->p = p;
+        pthread_create(&p->stid, NULL, subtitle_thread, sa);
+    }
 }
 
 static void player_threads_stop(PlayerContext *p)
@@ -352,10 +349,14 @@ static void player_threads_stop(PlayerContext *p)
     queue_close(&p->video_queue);
     queue_close(&p->audio_queue);
     queue_close(&p->frame_queue);
+    if (p->sub_active && p->sub_embedded)
+        queue_close(&p->sub_queue);
     pthread_join(p->dtid, NULL);
     pthread_join(p->vtid, NULL);
     if (p->audio_active)
         pthread_join(p->atid, NULL);
+    if (p->sub_active && p->sub_embedded)
+        pthread_join(p->stid, NULL);
 }
 
 static void player_queues_reinit(PlayerContext *p)
@@ -368,11 +369,12 @@ static void player_queues_reinit(PlayerContext *p)
     p->vdec.packet_queue = &p->video_queue;
     p->vdec.frame_queue  = &p->frame_queue;
     if (p->audio_active) p->audio.audio_queue = &p->audio_queue;
+    if (p->sub_active && p->sub_embedded) {
+        queue_init(&p->sub_queue);
+        p->demux.subtitle_queue = &p->sub_queue;
+        p->sub.subtitle_queue   = &p->sub_queue;
+    }
 }
-
-/* ------------------------------------------------------------------ */
-/* Close the video pipeline without touching the playlist              */
-/* ------------------------------------------------------------------ */
 
 static void player_close_pipeline(PlayerContext *p)
 {
@@ -387,24 +389,32 @@ static void player_close_pipeline(PlayerContext *p)
 
     player_threads_stop(p);
     if (p->audio_active) audio_close(&p->audio);
+    if (p->sub_active) {
+        subtitle_close(&p->sub);
+        if (p->sub_embedded) {
+            queue_destroy(&p->sub_queue);
+            p->demux.subtitle_queue = NULL;
+        }
+        p->sub_active    = 0;
+        p->sub_embedded  = 0;
+        p->last_sub_text = NULL;
+        /* Clear subtitle overlay plane */
+        if (p->drm_ctx)
+            drm_subtitle_update(p->drm_ctx, p->output_idx, NULL);
+    }
     vdec_close(&p->vdec);
     demux_close(&p->demux);
     queue_destroy(&p->video_queue);
     queue_destroy(&p->audio_queue);
     queue_destroy(&p->frame_queue);
 
-    p->pipeline_open  = 0;
-    p->audio_active   = 0;
-    p->wall_start     = 0;
-    p->frame_count    = 0;
-    p->current_pts    = 0;
-    p->eos            = 0;
+    p->pipeline_open = 0;
+    p->audio_active  = 0;
+    p->wall_start    = 0;
+    p->frame_count   = 0;
+    p->current_pts   = 0;
+    p->eos           = 0;
 }
-
-/* ------------------------------------------------------------------ */
-/* Open the video pipeline for a single file                           */
-/* Does NOT start threads — call player_threads_start separately.      */
-/* ------------------------------------------------------------------ */
 
 static int player_open_video(PlayerContext *p, const char *filename,
                               const Options *opt)
@@ -447,12 +457,39 @@ static int player_open_video(PlayerContext *p, const char *filename,
         p->current_pts = start_us;
     }
 
+    /* ---- Subtitles ---- */
+    p->sub_active    = 0;
+    p->sub_embedded  = 0;
+    p->last_sub_text = NULL;
+
+    const char *sub_path = opt->sub_path;
+    char auto_srt[512] = "";
+
+    if (!sub_path &&
+        find_srt_alongside(filename, auto_srt, (int)sizeof(auto_srt))) {
+        sub_path = auto_srt;
+        fprintf(stderr, "subtitle: auto-detected '%s'\n", sub_path);
+    }
+
+    if (sub_path) {
+        if (subtitle_open_file(&p->sub, sub_path, 0) == 0)
+            p->sub_active = 1;
+    } else if (demux_has_subtitles(&p->demux)) {
+        AVStream *sub_stream =
+            p->demux.fmt_ctx->streams[p->demux.subtitle_stream_idx];
+        queue_init(&p->sub_queue);
+        p->demux.subtitle_queue = &p->sub_queue;
+        if (subtitle_open(&p->sub, sub_stream, &p->sub_queue) == 0) {
+            p->sub_active   = 1;
+            p->sub_embedded = 1;
+        } else {
+            queue_destroy(&p->sub_queue);
+            p->demux.subtitle_queue = NULL;
+        }
+    }
+
     return 0;
 }
-
-/* ------------------------------------------------------------------ */
-/* Seek within the current video                                        */
-/* ------------------------------------------------------------------ */
 
 static void player_seek(PlayerContext *p, int64_t target_us)
 {
@@ -467,19 +504,16 @@ static void player_seek(PlayerContext *p, int64_t target_us)
     demux_seek(&p->demux, target_us);
     vdec_flush(&p->vdec);
     if (p->audio_active) audio_flush(&p->audio);
+    if (p->sub_active)   subtitle_flush(&p->sub);
     player_queues_reinit(p);
 
-    p->wall_start  = 0;
-    p->frame_count = 0;
-    p->eos         = 0;
+    p->wall_start    = 0;
+    p->frame_count   = 0;
+    p->eos           = 0;
+    p->last_sub_text = NULL;
 
     player_threads_start(p);
 }
-
-/* ------------------------------------------------------------------ */
-/* Advance to the next playlist item                                    */
-/* Returns 0 on success, -1 if the playlist is exhausted.              */
-/* ------------------------------------------------------------------ */
 
 static int player_advance_to_next(PlayerContext *p, DrmContext *drm,
                                    const Options *opt)
@@ -504,14 +538,12 @@ static int player_advance_to_next(PlayerContext *p, DrmContext *drm,
         } else {
             fprintf(stderr, "zeroplay[%d]: failed to decode image '%s', skipping\n",
                     p->output_idx, item->path);
-            /* Try the next item immediately */
             return player_advance_to_next(p, drm, opt);
         }
         p->image_mode   = 1;
         p->image_end_us = (p->image_duration_us > 0) ? now_us() + p->image_duration_us : 0;
 
     } else {
-        /* Video */
         player_close_pipeline(p);
         p->image_mode = 0;
 
@@ -528,17 +560,14 @@ static int player_advance_to_next(PlayerContext *p, DrmContext *drm,
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Open a player (playlist + first item)                               */
-/* ------------------------------------------------------------------ */
-
 static int player_open(PlayerContext *p, const char *path,
                         const Options *opt, int output_idx, DrmContext *drm)
 {
     memset(p, 0, sizeof(*p));
-    p->output_idx       = output_idx;
-    p->no_audio         = opt->no_audio || (output_idx != 0);
+    p->output_idx        = output_idx;
+    p->no_audio          = opt->no_audio || (output_idx != 0);
     p->image_duration_us = (int64_t)(opt->image_duration_s * 1000000.0);
+    p->drm_ctx           = drm;
 
     if (playlist_open(&p->playlist, path, opt->loop, opt->shuffle) < 0)
         return -1;
@@ -553,7 +582,6 @@ static int player_open(PlayerContext *p, const char *path,
             drm_present_image(drm, output_idx, pixels, w, h, stride);
             free(pixels);
         } else {
-            /* First item failed — try advancing */
             if (player_advance_to_next(p, drm, opt) < 0) {
                 playlist_close(&p->playlist);
                 return -1;
@@ -565,7 +593,6 @@ static int player_open(PlayerContext *p, const char *path,
         fprintf(stderr, "zeroplay[%d]: image '%s' (%.0fs)\n",
                 output_idx, item->path,
                 (double)p->image_duration_us / 1e6);
-
     } else {
         if (player_open_video(p, item->path, opt) < 0) {
             playlist_close(&p->playlist);
@@ -573,15 +600,10 @@ static int player_open(PlayerContext *p, const char *path,
         }
         fprintf(stderr, "zeroplay[%d]: playing '%s'\n",
                 output_idx, basename(item->path));
-        /* Threads will be started in main after all players are opened */
     }
 
     return 0;
 }
-
-/* ------------------------------------------------------------------ */
-/* Full player teardown                                                 */
-/* ------------------------------------------------------------------ */
 
 static void player_shutdown(PlayerContext *p)
 {
@@ -635,9 +657,9 @@ static int run_ws_mode(Options *opt)
     ws_shared_state_set_player_ready(&shared, 1);
 
     WsConfig ws_cfg = {
-        .backend_ws_url  = opt->ws_url,
-        .device_token    = opt->device_token,
-        .health_port     = opt->health_port,
+        .backend_ws_url    = opt->ws_url,
+        .device_token      = opt->device_token,
+        .health_port       = opt->health_port,
         .state_interval_ms = 5000,
         .ping_interval_ms  = 20000,
     };
@@ -660,7 +682,6 @@ static int run_ws_mode(Options *opt)
     signal(SIGABRT, crash_handler);
     signal(SIGBUS,  crash_handler);
 
-    /* Raise main thread to realtime */
     {
         struct sched_param sp = { .sched_priority = 10 };
         pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
@@ -672,12 +693,11 @@ static int run_ws_mode(Options *opt)
     player.no_audio   = opt->no_audio;
 
     int paused = 0;
-    int audio_started = 0;   /* defer audio until first DRM frame */
+    int audio_started = 0;
 
     fprintf(stderr, "zeroplay: ws mode — idle, waiting for commands\n");
 
     while (!g_signal_quit) {
-        /* --- Process WebSocket commands --- */
         WsCommand cmd;
         while (ws_cmd_queue_pop(&cmd_queue, &cmd)) {
             switch (cmd.type) {
@@ -692,11 +712,6 @@ static int run_ws_mode(Options *opt)
                     ws_shared_state_set_url(&shared, NULL);
                     ws_shared_state_set_position(&shared, -1.0);
                 } else {
-                    /* Pause audio BEFORE starting threads so the audio
-                     * thread blocks immediately.  We unpause after the
-                     * first DRM frame is presented — this avoids writing
-                     * to the HDMI ALSA device while DRM is still
-                     * configuring the connector. */
                     if (player.audio_active)
                         audio_pause(&player.audio);
                     player_threads_start(&player);
@@ -705,7 +720,6 @@ static int run_ws_mode(Options *opt)
                     ws_shared_state_set_paused(&shared, 0);
                 }
                 break;
-
             case CMD_PLAY:
                 if (player.pipeline_open && paused) {
                     paused = 0;
@@ -717,7 +731,6 @@ static int run_ws_mode(Options *opt)
                     fprintf(stderr, "zeroplay: play\n");
                 }
                 break;
-
             case CMD_PAUSE:
                 if (player.pipeline_open && !paused) {
                     paused = 1;
@@ -727,7 +740,6 @@ static int run_ws_mode(Options *opt)
                     fprintf(stderr, "zeroplay: pause\n");
                 }
                 break;
-
             case CMD_STOP:
                 fprintf(stderr, "zeroplay: stop\n");
                 player_close_pipeline(&player);
@@ -737,7 +749,6 @@ static int run_ws_mode(Options *opt)
                 ws_shared_state_set_position(&shared, -1.0);
                 ws_shared_state_set_paused(&shared, 0);
                 break;
-
             case CMD_SEEK:
                 if (player.pipeline_open) {
                     int64_t target_us = cmd.seek_position_ms * 1000LL;
@@ -757,35 +768,21 @@ static int run_ws_mode(Options *opt)
                     fprintf(stderr, "zeroplay: seek to %.1fs\n", target_us / 1e6);
                 }
                 break;
-
             default:
                 break;
             }
         }
 
-        /* --- Idle mode: no pipeline, just sleep --- */
-        if (!player.pipeline_open) {
-            sleep_us(50000);  /* 50ms idle poll */
-            continue;
-        }
+        if (!player.pipeline_open) { sleep_us(50000); continue; }
+        if (paused)                 { sleep_us(10000); continue; }
 
-        if (paused) {
-            sleep_us(10000);
-            continue;
-        }
-
-        /* --- Frame presentation --- */
         PlayerContext *p = &player;
 
         if (!p->held_frame) {
             void *item = NULL;
             int rc = queue_trypop(&p->frame_queue, &item);
-            if (rc == 0) {
-                sleep_us(2000);
-                continue;
-            }
+            if (rc == 0) { sleep_us(2000); continue; }
             if (rc < 0) {
-                /* End of stream — go idle */
                 fprintf(stderr, "zeroplay: end of stream\n");
                 player_close_pipeline(p);
                 ws_shared_state_set_idle(&shared, 1);
@@ -801,6 +798,15 @@ static int run_ws_mode(Options *opt)
         p->current_pts = frame->pts_us;
         ws_shared_state_set_position(&shared, frame->pts_us / 1e6);
 
+        /* Update subtitle overlay when cue changes */
+        if (p->sub_active) {
+            const char *sub = subtitle_get_active(&p->sub, p->current_pts);
+            if (sub != p->last_sub_text) {
+                drm_subtitle_update(&drm, p->output_idx, sub);
+                p->last_sub_text = sub;
+            }
+        }
+
         if (p->frame_count == 1 || p->wall_start == 0)
             p->wall_start = now_us() - frame->pts_us;
 
@@ -809,15 +815,11 @@ static int run_ws_mode(Options *opt)
 
         if (due <= now) {
             drm_present(&drm, 0, frame);
-
-            /* Start audio after first frame is on screen — the HDMI
-             * output is now stable so ALSA writes won't get EFAULT. */
             if (!audio_started && p->audio_active && !paused) {
                 audio_resume(&p->audio);
                 audio_started = 1;
                 fprintf(stderr, "zeroplay: audio started (after first frame)\n");
             }
-
             p->held_frame = NULL;
             if (p->prev_frame)
                 vdec_requeue_frame(&p->vdec, p->prev_frame);
@@ -865,7 +867,6 @@ int main(int argc, char *argv[])
     if (drm_open(&drm) < 0)
         return 1;
 
-    /* Clamp path count to available outputs */
     int player_count = opt.path_count;
     if (player_count > drm.output_count) {
         fprintf(stderr,
@@ -875,7 +876,6 @@ int main(int argc, char *argv[])
         player_count = drm.output_count;
     }
 
-    /* Open all players */
     PlayerContext players[MAX_FILES];
     int opened = 0;
     for (int i = 0; i < player_count; i++) {
@@ -892,12 +892,10 @@ int main(int argc, char *argv[])
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
 
-    /* Start video pipelines (skip image-mode players) */
     for (int i = 0; i < opened; i++)
         if (!players[i].image_mode && players[i].pipeline_open)
             player_threads_start(&players[i]);
 
-    /* Raise main thread to realtime */
     {
         struct sched_param sp = { .sched_priority = 10 };
         pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
@@ -1021,7 +1019,6 @@ int main(int argc, char *argv[])
 
         if (paused) { sleep_us(10000); continue; }
 
-        /* ---- Advance each player ---- */
         int64_t next_due = INT64_MAX;
         int     all_eos  = 1;
 
@@ -1030,7 +1027,6 @@ int main(int argc, char *argv[])
             if (p->eos) continue;
             all_eos = 0;
 
-            /* ---- Image mode ---- */
             if (p->image_mode) {
                 if (p->image_end_us > 0 && now_us() >= p->image_end_us) {
                     if (player_advance_to_next(p, &drm, &opt) < 0)
@@ -1041,22 +1037,16 @@ int main(int argc, char *argv[])
                     if (p->image_end_us < next_due)
                         next_due = p->image_end_us;
                 } else {
-                    /* duration 0 = hold forever, sleep a bit */
                     sleep_us(50000);
                 }
                 continue;
             }
 
-            /* ---- Video mode ---- */
             if (!p->held_frame) {
                 void *item = NULL;
                 int rc = queue_trypop(&p->frame_queue, &item);
-                if (rc == 0) {
-                    next_due = 0;
-                    continue;
-                }
+                if (rc == 0) { next_due = 0; continue; }
                 if (rc < 0) {
-                    /* End of stream — advance to next playlist item */
                     if (player_advance_to_next(p, &drm, &opt) < 0)
                         p->eos = 1;
                     else
@@ -1069,6 +1059,15 @@ int main(int argc, char *argv[])
 
             DecodedFrame *frame = p->held_frame;
             p->current_pts = frame->pts_us;
+
+            /* Update subtitle overlay when cue changes */
+            if (p->sub_active) {
+                const char *sub = subtitle_get_active(&p->sub, p->current_pts);
+                if (sub != p->last_sub_text) {
+                    drm_subtitle_update(&drm, p->output_idx, sub);
+                    p->last_sub_text = sub;
+                }
+            }
 
             if (p->frame_count == 1 || p->wall_start == 0)
                 p->wall_start = now_us() - frame->pts_us;

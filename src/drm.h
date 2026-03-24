@@ -1,5 +1,6 @@
 #ifndef DRM_H
 #define DRM_H
+
 #include <stdint.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -12,7 +13,7 @@ typedef struct {
     uint32_t crtc_id;
     uint32_t plane_id;
 
-    /* DRM property IDs */
+    /* Video plane property IDs */
     uint32_t prop_crtc_id;
     uint32_t prop_active;
     uint32_t prop_mode_id;
@@ -46,12 +47,34 @@ typedef struct {
     /* Previous framebuffer — freed on next present */
     uint32_t prev_fb_id;
     uint32_t prev_gem_handle;
-    int      prev_is_dumb;    /* 1 = dumb buffer, 0 = DMABUF-imported GEM */
-
+    int      prev_is_dumb;
     int      first_frame;
 
     /* Saved CRTC state for restore on close */
     drmModeCrtcPtr prev_crtc;
+
+    /* ---- Subtitle overlay plane ---- */
+    uint32_t ovl_plane_id;      /* 0 = no overlay plane available      */
+
+    /* Overlay plane property IDs */
+    uint32_t ovl_prop_fb_id;
+    uint32_t ovl_prop_crtc_id;
+    uint32_t ovl_prop_crtc_x;
+    uint32_t ovl_prop_crtc_y;
+    uint32_t ovl_prop_crtc_w;
+    uint32_t ovl_prop_crtc_h;
+    uint32_t ovl_prop_src_x;
+    uint32_t ovl_prop_src_y;
+    uint32_t ovl_prop_src_w;
+    uint32_t ovl_prop_src_h;
+
+    /* Persistent ARGB8888 dumb buffer for the overlay */
+    uint32_t ovl_gem;           /* GEM handle                          */
+    uint32_t ovl_fb_id;         /* registered framebuffer              */
+    uint32_t ovl_pitch;         /* bytes per row                       */
+    size_t   ovl_buf_size;      /* total buffer size in bytes          */
+    void    *ovl_map;           /* mmap pointer (NULL = not allocated) */
+    int      ovl_showing;       /* 1 = overlay plane currently active  */
 } DrmOutput;
 
 typedef struct {
@@ -68,6 +91,14 @@ int  drm_present(DrmContext *ctx, int output_idx, DecodedFrame *frame);
 /* Present a still image (XRGB8888 pixels, CPU memory) */
 int  drm_present_image(DrmContext *ctx, int output_idx,
                         uint8_t *pixels, int width, int height, int stride);
+
+/*
+ * Update the subtitle overlay.
+ * text=NULL  — clear and hide the overlay plane.
+ * text!=NULL — render text and show the overlay plane.
+ * No-op if no overlay plane was found at open time.
+ */
+int  drm_subtitle_update(DrmContext *ctx, int output_idx, const char *text);
 
 void drm_close(DrmContext *ctx);
 

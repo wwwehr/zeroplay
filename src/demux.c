@@ -8,12 +8,14 @@ int demux_open(DemuxContext *ctx, const char *filename,
                Queue *video_queue, Queue *audio_queue,
                int64_t hls_max_bandwidth)
 {
-    ctx->fmt_ctx          = NULL;
-    ctx->video_stream_idx = -1;
-    ctx->audio_stream_idx = -1;
-    ctx->duration_us      = 0;
-    ctx->video_queue      = video_queue;
-    ctx->audio_queue      = audio_queue;
+    ctx->fmt_ctx             = NULL;
+    ctx->video_stream_idx    = -1;
+    ctx->audio_stream_idx    = -1;
+    ctx->subtitle_stream_idx = -1;
+    ctx->duration_us         = 0;
+    ctx->video_queue         = video_queue;
+    ctx->audio_queue         = audio_queue;
+    ctx->subtitle_queue      = NULL;
 
     /*
      * Pre-allocate the format context so that memory limits are in effect
@@ -55,6 +57,7 @@ int demux_open(DemuxContext *ctx, const char *filename,
      * Pi Zero's V4L2 M2M decoder doesn't support. */
     for (unsigned int i = 0; i < ctx->fmt_ctx->nb_streams; i++) {
         AVCodecParameters *par = ctx->fmt_ctx->streams[i]->codecpar;
+
         if (par->codec_type == AVMEDIA_TYPE_VIDEO &&
             ctx->video_stream_idx == -1 &&
             par->codec_id == AV_CODEC_ID_H264)
@@ -63,6 +66,10 @@ int demux_open(DemuxContext *ctx, const char *filename,
         if (par->codec_type == AVMEDIA_TYPE_AUDIO &&
             ctx->audio_stream_idx == -1)
             ctx->audio_stream_idx = (int)i;
+
+        if (par->codec_type == AVMEDIA_TYPE_SUBTITLE &&
+            ctx->subtitle_stream_idx == -1)
+            ctx->subtitle_stream_idx = (int)i;
     }
 
     /* Fallback: if no H.264 stream found, take the first video stream
@@ -109,12 +116,20 @@ int demux_open(DemuxContext *ctx, const char *filename,
                 );
     }
 
+    if (ctx->subtitle_stream_idx >= 0) {
+        AVStream *ss = ctx->fmt_ctx->streams[ctx->subtitle_stream_idx];
+        fprintf(stderr, "demux: subtitle stream %d — %s\n",
+                ctx->subtitle_stream_idx,
+                avcodec_get_name(ss->codecpar->codec_id));
+    }
+
     /* Discard streams we don't use — frees their codec parsing state and
      * (for HLS) tells the demuxer it can skip downloading segments for
      * those variants.  Important for memory on Pi Zero. */
     for (unsigned int i = 0; i < ctx->fmt_ctx->nb_streams; i++) {
-        if ((int)i != ctx->video_stream_idx &&
-            (int)i != ctx->audio_stream_idx)
+        if ((int)i != ctx->video_stream_idx  &&
+            (int)i != ctx->audio_stream_idx  &&
+            (int)i != ctx->subtitle_stream_idx)
             ctx->fmt_ctx->streams[i]->discard = AVDISCARD_ALL;
     }
 
@@ -149,6 +164,15 @@ void demux_run(DemuxContext *ctx)
                 av_packet_free(&queued);
                 break;
             }
+        } else if (pkt->stream_index == ctx->subtitle_stream_idx &&
+                   ctx->subtitle_queue) {
+            AVPacket *queued = av_packet_alloc();
+            if (!queued) { av_packet_unref(pkt); continue; }
+            av_packet_move_ref(queued, pkt);
+            if (!queue_push(ctx->subtitle_queue, queued)) {
+                av_packet_free(&queued);
+                break;
+            }
         } else {
             av_packet_unref(pkt);
         }
@@ -159,6 +183,8 @@ done:
     queue_close(ctx->video_queue);
     if (ctx->audio_stream_idx >= 0)
         queue_close(ctx->audio_queue);
+    if (ctx->subtitle_stream_idx >= 0 && ctx->subtitle_queue)
+        queue_close(ctx->subtitle_queue);
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,6 +204,13 @@ int demux_seek(DemuxContext *ctx, int64_t target_us)
         return -1;
     }
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+
+int demux_has_subtitles(DemuxContext *ctx)
+{
+    return ctx->subtitle_stream_idx >= 0;
 }
 
 /* ------------------------------------------------------------------ */
